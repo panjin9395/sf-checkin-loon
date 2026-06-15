@@ -220,12 +220,14 @@ function doTasks(cookie, finalCb) {
 
   postJson(cookie, QUERY, body, function (qr) {
     if (!qr || !qr.success) { finalCb("任务查询失败: " + (qr ? (qr.errorMessage||"") : "无返回")); return; }
-    // 调试: 弹出 obj 的字段结构, 定位任务列表真实字段名
-    const objKeys = qr.obj ? Object.keys(qr.obj).join(",") : "无obj";
-    notify("顺丰任务[调试]", "obj字段: " + objKeys, JSON.stringify(qr.obj).slice(0, 250));
+    let tasks = (qr.obj && (qr.obj.taskTitleLevels || qr.obj.taskDtoList || qr.obj.taskList)) || [];
+    // 调试: 弹出第一个任务的完整字段, 定位 taskCode/status 真实结构
+    if (tasks.length) {
+      notify("顺丰任务[调试]", "任务数:" + tasks.length + " 字段:" + Object.keys(tasks[0]).join(","), JSON.stringify(tasks[0]).slice(0, 280));
+    } else {
+      notify("顺丰任务[调试]", "未解析到任务", JSON.stringify(qr.obj).slice(0, 200));
+    }
 
-    // 尝试多个可能的字段名
-    let tasks = (qr.obj && (qr.obj.taskDtoList || qr.obj.taskTitleLevels || qr.obj.taskList || qr.obj.tasks)) || [];
     const total = tasks.length;
     const finished = tasks.filter(t => t.taskStatus === 2 || t.status === 3).length;
     const todo = tasks.filter(t => (t.taskStatus !== 2 && t.status !== 3) && (t.taskCode || t.taskId));
