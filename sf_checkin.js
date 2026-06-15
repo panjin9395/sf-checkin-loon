@@ -153,7 +153,7 @@ function main() {
   // 注意: 不再"整天跳过", 这样可随时手动重测; 签到/任务接口对重复调用安全
   const lastTs = parseInt($persistentStore.read(LASTRUN_KEY) || "0", 10);
   const nowTs = Date.now();
-  if (nowTs - lastTs < 10 * 60 * 1000) { done(); return; }
+  if (nowTs - lastTs < 0 * 60 * 1000) { done(); return; }
   $persistentStore.write(String(nowTs), LASTRUN_KEY);
 
   const urlPath = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage";
@@ -219,11 +219,16 @@ function doTasks(cookie, finalCb) {
   const body = { channelType: "1", deviceId: DEVICE_ID };
 
   postJson(cookie, QUERY, body, function (qr) {
-    if (!qr || !qr.success) { finalCb("任务查询失败"); return; }
-    const tasks = (qr.obj && qr.obj.taskDtoList) || [];
+    if (!qr || !qr.success) { finalCb("任务查询失败: " + (qr ? (qr.errorMessage||"") : "无返回")); return; }
+    // 调试: 弹出 obj 的字段结构, 定位任务列表真实字段名
+    const objKeys = qr.obj ? Object.keys(qr.obj).join(",") : "无obj";
+    notify("顺丰任务[调试]", "obj字段: " + objKeys, JSON.stringify(qr.obj).slice(0, 250));
+
+    // 尝试多个可能的字段名
+    let tasks = (qr.obj && (qr.obj.taskDtoList || qr.obj.taskTitleLevels || qr.obj.taskList || qr.obj.tasks)) || [];
     const total = tasks.length;
-    const finished = tasks.filter(t => t.taskStatus === 2).length;
-    const todo = tasks.filter(t => t.taskStatus !== 2 && t.taskCode);
+    const finished = tasks.filter(t => t.taskStatus === 2 || t.status === 3).length;
+    const todo = tasks.filter(t => (t.taskStatus !== 2 && t.status !== 3) && (t.taskCode || t.taskId));
 
     let done2 = 0;
     function step(i) {
