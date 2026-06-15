@@ -131,16 +131,24 @@ function notify(title, sub, body) {
 function done() { $done({}); }
 
 function main() {
-  // 取拦截请求的 cookie
-  const reqHeaders = $request.headers;
-  let cookie = reqHeaders["Cookie"] || reqHeaders["cookie"] || "";
-  if (!cookie || cookie.indexOf("sessionId=") === -1) {
+  // 取拦截请求的 cookie (兼容各种大小写写法)
+  const reqHeaders = $request.headers || {};
+  let cookie = "";
+  for (const k in reqHeaders) {
+    if (k.toLowerCase() === "cookie") { cookie = reqHeaders[k]; break; }
+  }
+
+  // 调试: 弹出抓到的 header 概况
+  const hasSession = cookie.indexOf("sessionId=") !== -1;
+  notify("顺丰签到[调试]", `cookie长度:${cookie.length} sessionId:${hasSession}`, cookie ? cookie.slice(0, 80) : "未拿到cookie, header keys: " + Object.keys(reqHeaders).join(","));
+
+  if (!cookie || !hasSession) {
     done(); return;
   }
 
   // 当天已签则跳过
   const last = $persistentStore.read(SIGNED_KEY);
-  if (last === TODAY) { done(); return; }
+  if (last === TODAY) { notify("顺丰签到", "今日已签过", "跳过"); done(); return; }
 
   const urlPath = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage";
   const referer = `${BASE}/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1`;
