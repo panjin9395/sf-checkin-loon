@@ -153,7 +153,7 @@ function main() {
   // 注意: 不再"整天跳过", 这样可随时手动重测; 签到/任务接口对重复调用安全
   const lastTs = parseInt($persistentStore.read(LASTRUN_KEY) || "0", 10);
   const nowTs = Date.now();
-  if (nowTs - lastTs < 0 * 60 * 1000) { done(); return; }
+  if (nowTs - lastTs < 10 * 60 * 1000) { done(); return; }
   $persistentStore.write(String(nowTs), LASTRUN_KEY);
 
   const urlPath = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage";
