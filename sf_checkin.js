@@ -221,16 +221,12 @@ function doTasks(cookie, finalCb) {
   postJson(cookie, QUERY, body, function (qr) {
     if (!qr || !qr.success) { finalCb("任务查询失败: " + (qr ? (qr.errorMessage||"") : "无返回")); return; }
     let tasks = (qr.obj && (qr.obj.taskTitleLevels || qr.obj.taskDtoList || qr.obj.taskList)) || [];
-    // 调试: 弹出第一个任务的完整字段, 定位 taskCode/status 真实结构
-    if (tasks.length) {
-      notify("顺丰任务[调试]", "任务数:" + tasks.length + " 字段:" + Object.keys(tasks[0]).join(","), JSON.stringify(tasks[0]).slice(0, 280));
-    } else {
-      notify("顺丰任务[调试]", "未解析到任务", JSON.stringify(qr.obj).slice(0, 200));
-    }
 
     const total = tasks.length;
-    const finished = tasks.filter(t => t.taskStatus === 2 || t.status === 3).length;
-    const todo = tasks.filter(t => (t.taskStatus !== 2 && t.status !== 3) && (t.taskCode || t.taskId));
+    // "去完成" 表示未做; 其他(已完成/去领取等)视为已处理
+    const todo = tasks.filter(t => t.taskCode && t.buttonContent === "去完成");
+    const finished = total - todo.length;
+    const doneNames = [];
 
     let done2 = 0;
     function step(i) {
@@ -238,17 +234,21 @@ function doTasks(cookie, finalCb) {
         // 全部完成后领奖励
         postJson(cookie, REWARD, body, function (rr) {
           let rmsg = "领奖未知";
-          if (rr && rr.success) rmsg = "奖励已领取";
-          else if (rr) {
+          if (rr && rr.success) {
+            const robj = rr.obj || {};
+            const pts = robj.totalReward || robj.point || robj.integral || "";
+            rmsg = "奖励已领取" + (pts ? `(+${pts})` : "");
+          } else if (rr) {
             const m = rr.errorMessage || "";
             rmsg = (m.indexOf("无可领") !== -1 || m.indexOf("已领") !== -1) ? "暂无可领奖励" : ("领奖:" + m);
           }
-          finalCb(`任务 ${finished + done2}/${total} 完成; ${rmsg}`);
+          const detail = doneNames.length ? ("完成:" + doneNames.join("、")) : "";
+          finalCb(`任务 ${finished + done2}/${total}; ${rmsg}${detail ? "; " + detail : ""}`);
         });
         return;
       }
       postJson(cookie, FINISH, { taskCode: todo[i].taskCode }, function (fr) {
-        if (fr && fr.success) done2++;
+        if (fr && fr.success) { done2++; doneNames.push(todo[i].title || ""); }
         setTimeout(function () { step(i + 1); }, 1500);
       });
     }
