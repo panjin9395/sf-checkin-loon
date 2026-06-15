@@ -131,6 +131,12 @@ function notify(title, sub, body) {
 function done() { $done({}); }
 
 function main() {
+  // 保护: 必须在 http-request 流量拦截上下文运行
+  if (typeof $request === "undefined" || !$request) {
+    notify("顺丰签到[调试]", "未在流量拦截上下文运行", "请勿手动运行脚本; 应打开顺丰App进入积分页, 由插件自动触发");
+    done(); return;
+  }
+
   // 取拦截请求的 cookie (兼容各种大小写写法)
   const reqHeaders = $request.headers || {};
   let cookie = "";
