@@ -164,28 +164,86 @@ function main() {
     headers: headers,
     body: JSON.stringify({ comeFrom: "vioin", channelFrom: "SFAPP" }),
   }, function (err, resp, data) {
-    if (err) { notify("顺丰签到", "请求失败", String(err)); done(); return; }
-    try {
-      const j = JSON.parse(data);
-      if (j.success) {
-        const obj = j.obj || {};
-        const days = obj.countDay || 0;
-        let pkg = "";
-        const list = obj.integralTaskSignPackageVOList || [];
-        if (list.length) pkg = list.map(p => p.packetName || p.commodityName).join("、");
-        $persistentStore.write(TODAY, SIGNED_KEY);
-        if (obj.hasFinishSign === 1) {
-          notify("顺丰签到", `今日已签到`, `连续 ${days} 天`);
+    let signMsg = "";
+    if (err) {
+      signMsg = "签到请求失败";
+    } else {
+      try {
+        const j = JSON.parse(data);
+        if (j.success) {
+          const obj = j.obj || {};
+          const days = obj.countDay || 0;
+          const list = obj.integralTaskSignPackageVOList || [];
+          const pkg = list.length ? list.map(p => p.packetName || p.commodityName).join("、") : "";
+          $persistentStore.write(TODAY, SIGNED_KEY);
+          signMsg = obj.hasFinishSign === 1
+            ? `今日已签 连签${days}天`
+            : `签到成功 连签${days}天 ${pkg ? "获得:" + pkg : ""}`;
         } else {
-          notify("顺丰签到 ✅", `签到成功 连续 ${days} 天`, `获得: ${pkg || "无"}`);
+          signMsg = "签到: " + (j.errorMessage || "失败");
         }
-      } else {
-        notify("顺丰签到", "失败", j.errorMessage || JSON.stringify(j).slice(0, 100));
+      } catch (e) {
+        signMsg = "签到解析失败";
       }
-    } catch (e) {
-      notify("顺丰签到", "解析失败", String(data).slice(0, 100));
     }
-    done();
+    // 签到后继续做每日任务
+    doTasks(cookie, function (taskMsg) {
+      notify("顺丰积分 ✅", signMsg, taskMsg);
+      done();
+    });
+  });
+}
+
+// ===== 每日任务: 查询 -> 完成未完成 -> 领奖励 =====
+function postJson(cookie, urlPath, bodyObj, cb) {
+  const referer = `${BASE}/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1`;
+  const headers = buildHeaders(cookie, urlPath, referer, {
+    "Accept": "application/json, text/plain, */*",
+  });
+  $httpClient.post({
+    url: BASE + urlPath,
+    headers: headers,
+    body: JSON.stringify(bodyObj),
+  }, function (err, resp, data) {
+    if (err) { cb(null); return; }
+    try { cb(JSON.parse(data)); } catch (e) { cb(null); }
+  });
+}
+
+function doTasks(cookie, finalCb) {
+  const QUERY = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskStrategyService~queryPointTaskAndSignFromES";
+  const FINISH = "/mcs-mimp/commonPost/~memberEs~taskRecord~finishTask";
+  const REWARD = "/mcs-mimp/commonNoLoginPost/~memberNonactivity~integralTaskStrategyService~fetchTasksReward";
+  const body = { channelType: "1", deviceId: DEVICE_ID };
+
+  postJson(cookie, QUERY, body, function (qr) {
+    if (!qr || !qr.success) { finalCb("任务查询失败"); return; }
+    const tasks = (qr.obj && qr.obj.taskDtoList) || [];
+    const total = tasks.length;
+    const finished = tasks.filter(t => t.taskStatus === 2).length;
+    const todo = tasks.filter(t => t.taskStatus !== 2 && t.taskCode);
+
+    let done2 = 0;
+    function step(i) {
+      if (i >= todo.length) {
+        // 全部完成后领奖励
+        postJson(cookie, REWARD, body, function (rr) {
+          let rmsg = "领奖未知";
+          if (rr && rr.success) rmsg = "奖励已领取";
+          else if (rr) {
+            const m = rr.errorMessage || "";
+            rmsg = (m.indexOf("无可领") !== -1 || m.indexOf("已领") !== -1) ? "暂无可领奖励" : ("领奖:" + m);
+          }
+          finalCb(`任务 ${finished + done2}/${total} 完成; ${rmsg}`);
+        });
+        return;
+      }
+      postJson(cookie, FINISH, { taskCode: todo[i].taskCode }, function (fr) {
+        if (fr && fr.success) done2++;
+        setTimeout(function () { step(i + 1); }, 1500);
+      });
+    }
+    step(0);
   });
 }
 
