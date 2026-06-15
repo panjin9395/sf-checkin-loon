@@ -1,0 +1,11 @@
+#!name = 顺丰签到
+#!desc = 打开顺丰App进入会员/积分页面时自动签到 (抓取实时cookie, 绕过20分钟过期)
+#!author = ops
+#!icon = https://mcs-mimp-static.sf-express.com/favicon.ico
+
+[Script]
+# 挂在签到/积分查询接口上, 拦到请求即用其 cookie 触发签到
+http-request ^https:\/\/mcs-mimp-web\.sf-express\.com\/mcs-mimp\/commonPost\/.*(queryPointTaskAndSignFromES|personalInfoNew|automaticSignFetchPackage) script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/main/sf_checkin.js, requires-body=true, timeout=20, tag=顺丰签到
+
+[MITM]
+hostname = mcs-mimp-web.sf-express.com
