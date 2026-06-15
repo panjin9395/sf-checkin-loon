@@ -65,7 +65,7 @@ const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/6
 
 // ---- 防重复: 每天只签一次 ----
 const TODAY = new Date().toISOString().slice(0, 10);
-const SIGNED_KEY = "sf_signed_date";
+const LASTRUN_KEY = "sf_lastrun_ts";
 
 function genSignature(ts) {
   return md5(`wwesldfs29aniversaryvdld29&timestamp=${ts}&sysCode=${SYS_CODE}`);
@@ -149,9 +149,12 @@ function main() {
     done(); return;
   }
 
-  // 当天已签则跳过 (静默, 不弹通知)
-  const last = $persistentStore.read(SIGNED_KEY);
-  if (last === TODAY) { done(); return; }
+  // 限流: 距上次执行不足 10 分钟则跳过 (防止 App 内翻页反复触发刷屏)
+  // 注意: 不再"整天跳过", 这样可随时手动重测; 签到/任务接口对重复调用安全
+  const lastTs = parseInt($persistentStore.read(LASTRUN_KEY) || "0", 10);
+  const nowTs = Date.now();
+  if (nowTs - lastTs < 10 * 60 * 1000) { done(); return; }
+  $persistentStore.write(String(nowTs), LASTRUN_KEY);
 
   const urlPath = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage";
   const referer = `${BASE}/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1`;
@@ -175,7 +178,6 @@ function main() {
           const days = obj.countDay || 0;
           const list = obj.integralTaskSignPackageVOList || [];
           const pkg = list.length ? list.map(p => p.packetName || p.commodityName).join("、") : "";
-          $persistentStore.write(TODAY, SIGNED_KEY);
           signMsg = obj.hasFinishSign === 1
             ? `今日已签 连签${days}天`
             : `签到成功 连签${days}天 ${pkg ? "获得:" + pkg : ""}`;
