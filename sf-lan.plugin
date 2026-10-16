@@ -1,0 +1,7 @@
+#!name=顺丰局域网会话同步
+#!desc=仅加密上传会话到102，不在手机执行签到；需先私密配对。
+[Script]
+http-request ^https:\/\/mcs-mimp-web\.sf-express\.com\/mcs-mimp\/commonPost\/.*(queryPointTaskAndSignFromES|personalInfoNew|automaticSignFetchPackage) script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/optimize-v2/sf_lan_upload.js, requires-body=false, timeout=15, tag=顺丰会话同步
+generic script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/optimize-v2/sf_lan_upload.js, timeout=10, tag=顺丰同步诊断
+[MITM]
+hostname=mcs-mimp-web.sf-express.com
