@@ -64,7 +64,7 @@ const DEVICE_ID = "33B73C32-36C8-4E69-A199-F34AB52E6E9E";
 const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 mediaCode=SFEXPRESSAPP-iOS-ML";
 
 // ---- 防重复: 每天只签一次 ----
-const TODAY = new Date().toISOString().slice(0, 10);
+// No UTC day marker: throttle is elapsed-time based.
 const LASTRUN_KEY = "sf_lastrun_ts";
 
 function genSignature(ts) {
@@ -128,132 +128,95 @@ function notify(title, sub, body) {
   $notification.post(title, sub, body);
 }
 
-function done() { $done({}); }
 
-function main() {
-  // 保护: 必须在 http-request 流量拦截上下文运行
-  if (typeof $request === "undefined" || !$request) {
-    notify("顺丰签到[调试]", "未在流量拦截上下文运行", "请勿手动运行脚本; 应打开顺丰App进入积分页, 由插件自动触发");
-    done(); return;
-  }
 
-  // 取拦截请求的 cookie (兼容各种大小写写法)
-  const reqHeaders = $request.headers || {};
-  let cookie = "";
-  for (const k in reqHeaders) {
-    if (k.toLowerCase() === "cookie") { cookie = reqHeaders[k]; break; }
-  }
 
-  const hasSession = cookie.indexOf("sessionId=") !== -1;
-  if (!cookie || !hasSession) {
-    done(); return;
-  }
-
-  // 限流: 距上次执行不足 10 分钟则跳过 (防止 App 内翻页反复触发刷屏)
-  // 注意: 不再"整天跳过", 这样可随时手动重测; 签到/任务接口对重复调用安全
-  const lastTs = parseInt($persistentStore.read(LASTRUN_KEY) || "0", 10);
-  const nowTs = Date.now();
-  if (nowTs - lastTs < 10 * 60 * 1000) { done(); return; }
-  $persistentStore.write(String(nowTs), LASTRUN_KEY);
-
-  const urlPath = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage";
-  const referer = `${BASE}/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1`;
-  const headers = buildHeaders(cookie, urlPath, referer, {
-    "Accept": "application/json, text/plain, */*",
-  });
-
-  $httpClient.post({
-    url: BASE + urlPath,
-    headers: headers,
-    body: JSON.stringify({ comeFrom: "vioin", channelFrom: "SFAPP" }),
-  }, function (err, resp, data) {
-    let signMsg = "";
-    if (err) {
-      signMsg = "签到请求失败";
-    } else {
-      try {
-        const j = JSON.parse(data);
-        if (j.success) {
-          const obj = j.obj || {};
-          const days = obj.countDay || 0;
-          const list = obj.integralTaskSignPackageVOList || [];
-          const pkg = list.length ? list.map(p => p.packetName || p.commodityName).join("、") : "";
-          signMsg = obj.hasFinishSign === 1
-            ? `今日已签 连签${days}天`
-            : `签到成功 连签${days}天 ${pkg ? "获得:" + pkg : ""}`;
-        } else {
-          signMsg = "签到: " + (j.errorMessage || "失败");
-        }
-      } catch (e) {
-        signMsg = "签到解析失败";
-      }
+// v2: bounded execution, global lease, honest counts, no mutating-request retries.
+(async function main() {
+  const LOCK = 'sf_checkin_lock_v2', stamp = String(Date.now()) + '-' + Math.random();
+  const started = Date.now(), budget = 90000;
+  let owns = false, ended = false, title = '顺丰积分 ⚠️', sub = '', detail = '';
+  const remain = () => budget - (Date.now() - started);
+  function finish() { if (!ended) { ended = true; $done({}); } }
+  function readLease() { try { return JSON.parse($persistentStore.read(LOCK) || '{}'); } catch (_) { return {}; } }
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+  try {
+    if (typeof $request === 'undefined' || !$request) {
+      notify('顺丰积分', '需要新鲜登录状态', '请打开顺丰App的会员或积分页触发，不能独立定时签到。'); return;
     }
-    // 签到后继续做每日任务
-    doTasks(cookie, function (taskMsg) {
-      notify("顺丰积分 ✅", signMsg, taskMsg);
-      done();
-    });
-  });
-}
-
-// ===== 每日任务: 查询 -> 完成未完成 -> 领奖励 =====
-function postJson(cookie, urlPath, bodyObj, cb) {
-  const referer = `${BASE}/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1`;
-  const headers = buildHeaders(cookie, urlPath, referer, {
-    "Accept": "application/json, text/plain, */*",
-  });
-  $httpClient.post({
-    url: BASE + urlPath,
-    headers: headers,
-    body: JSON.stringify(bodyObj),
-  }, function (err, resp, data) {
-    if (err) { cb(null); return; }
-    try { cb(JSON.parse(data)); } catch (e) { cb(null); }
-  });
-}
-
-function doTasks(cookie, finalCb) {
-  const QUERY = "/mcs-mimp/commonPost/~memberNonactivity~integralTaskStrategyService~queryPointTaskAndSignFromES";
-  const FINISH = "/mcs-mimp/commonPost/~memberEs~taskRecord~finishTask";
-  const REWARD = "/mcs-mimp/commonNoLoginPost/~memberNonactivity~integralTaskStrategyService~fetchTasksReward";
-  const body = { channelType: "1", deviceId: DEVICE_ID };
-
-  postJson(cookie, QUERY, body, function (qr) {
-    if (!qr || !qr.success) { finalCb("任务查询失败: " + (qr ? (qr.errorMessage||"") : "无返回")); return; }
-    let tasks = (qr.obj && (qr.obj.taskTitleLevels || qr.obj.taskDtoList || qr.obj.taskList)) || [];
-
-    const total = tasks.length;
-    // "去完成" 表示未做; 其他(已完成/去领取等)视为已处理
-    const todo = tasks.filter(t => t.taskCode && t.buttonContent === "去完成");
-    const finished = total - todo.length;
-    const doneNames = [];
-
-    let done2 = 0;
-    function step(i) {
-      if (i >= todo.length) {
-        // 全部完成后领奖励
-        postJson(cookie, REWARD, body, function (rr) {
-          let rmsg = "领奖未知";
-          if (rr && rr.success) {
-            const robj = rr.obj || {};
-            const pts = robj.totalReward || robj.point || robj.integral || "";
-            rmsg = "奖励已领取" + (pts ? `(+${pts})` : "");
-          } else if (rr) {
-            const m = rr.errorMessage || "";
-            rmsg = (m.indexOf("无可领") !== -1 || m.indexOf("已领") !== -1) ? "暂无可领奖励" : ("领奖:" + m);
-          }
-          const detail = doneNames.length ? ("完成:" + doneNames.join("、")) : "";
-          finalCb(`任务 ${finished + done2}/${total}; ${rmsg}${detail ? "; " + detail : ""}`);
-        });
-        return;
-      }
-      postJson(cookie, FINISH, { taskCode: todo[i].taskCode }, function (fr) {
-        if (fr && fr.success) { done2++; doneNames.push(todo[i].title || ""); }
-        setTimeout(function () { step(i + 1); }, 1500);
+    if (!/^https:\/\/mcs-mimp-web\.sf-express\.com\//.test($request.url || '')) return;
+    const incoming = $request.headers || {};
+    const key = Object.keys(incoming).find(k => k.toLowerCase() === 'cookie');
+    const cookie = key ? String(incoming[key]) : '';
+    if (!/(?:^|;\s*)sessionId=[^;\s]+/.test(cookie)) return;
+    const lease = readLease();
+    if (Number(lease.until) > Date.now()) return;
+    const previous = Number($persistentStore.read(LASTRUN_KEY) || 0);
+    if (Number.isFinite(previous) && Date.now() - previous < 600000) return;
+    if (!$persistentStore.write(JSON.stringify({owner:stamp,until:Date.now()+110000}), LOCK)) return;
+    if (readLease().owner !== stamp) return;
+    owns = true;
+    $persistentStore.write(String(Date.now()), LASTRUN_KEY);
+    async function post(path, body) {
+      if (remain() < 4500) throw new Error('BUDGET');
+      const timeout = Math.min(10000, remain()-1000);
+      return new Promise((resolve,reject) => {
+        let settled = false;
+        const timer = setTimeout(() => { settled=true; reject(new Error('TIMEOUT')); },timeout);
+        const cb = (err,res,text) => {
+          if (settled) return; settled=true; clearTimeout(timer);
+          if (err) return reject(new Error('NETWORK'));
+          const status=Number(res && (res.status || res.statusCode));
+          if (status===401 || status===403) return reject(new Error('AUTH'));
+          if (status===429) return reject(new Error('RATE'));
+          if (!Number.isFinite(status) || status<200 || status>=300) return reject(new Error('HTTP'));
+          try { resolve(JSON.parse(text)); } catch (_) { reject(new Error('JSON')); }
+        };
+        const headers=buildHeaders(cookie,path,BASE+'/superWelfare?path=/superWelfare&supportShare=YES&from=appIndex&tab=1',{'Accept':'application/json, text/plain, */*'});
+        try { $httpClient.post({url:BASE+path,headers,body:JSON.stringify(body),timeout:Math.ceil(timeout/1000)},cb); }
+        catch (_) { if(!settled){settled=true;clearTimeout(timer);reject(new Error('NETWORK'));} }
       });
     }
-    step(0);
-  });
-}
-
-main();
+    const PREFIX='/mcs-mimp/commonPost/';
+    const sign=await post(PREFIX+'~memberNonactivity~integralTaskSignPlusService~automaticSignFetchPackage',{comeFrom:'vioin',channelFrom:'SFAPP'});
+    const signOK=sign && sign.success===true;
+    sub=signOK ? '签到接口确认成功' : '签到未确认成功';
+    if (!signOK) { detail='服务端未确认签到成功，已停止后续任务；请在App查看登录或风控提示。'; return; }
+    const body={channelType:'1',deviceId:DEVICE_ID};
+    const qr=await post(PREFIX+'~memberNonactivity~integralTaskStrategyService~queryPointTaskAndSignFromES',body);
+    if (!qr || qr.success!==true) { detail='签到成功；任务查询未成功，不虚报完成数量。'; return; }
+    const obj=qr.obj || {}, tasks=obj.taskTitleLevels || obj.taskDtoList || obj.taskList;
+    if (!Array.isArray(tasks)) { detail='签到成功；任务结构发生变化，已停止。'; return; }
+    const seen=new Set(),todo=[];
+    let knownDone=0,unknown=0,accepted=0,failed=0;
+    for(const t of tasks){
+      if(!t || typeof t!=='object'){unknown++;continue;}
+      if(t.buttonContent==='去完成' && t.taskCode){if(!seen.has(String(t.taskCode))){seen.add(String(t.taskCode));todo.push(t);}}
+      else if(['已完成','已领取','去领取','领取奖励'].includes(t.buttonContent))knownDone++;
+      else unknown++;
+    }
+    for(let i=0;i<todo.length;i++){
+      if(remain()<12000)throw new Error('BUDGET');
+      if(i>0)await delay(1500);
+      const fr=await post(PREFIX+'~memberEs~taskRecord~finishTask',{taskCode:todo[i].taskCode});
+      if(fr && fr.success===true)accepted++;else failed++;
+    }
+    const reward=await post('/mcs-mimp/commonNoLoginPost/~memberNonactivity~integralTaskStrategyService~fetchTasksReward',body);
+    const rewardOK=reward && reward.success===true;
+    detail=`任务列表${tasks.length}项；原已完成/待领奖${knownDone}项；本次接口接受${accepted}项；失败${failed}项；未知状态${unknown}项。\n`+
+      (rewardOK?'领奖接口确认成功（积分到账以App为准）。':'领奖未确认成功或暂无奖励，请在App核对。');
+    // Accepted completion calls are not proof that every task is finally settled.
+    if(!failed && !unknown && rewardOK)title='顺丰积分 ✅';
+  } catch(e) {
+    const map={BUDGET:'达到安全执行时限，已停止；未处理任务留到下次打开App。',TIMEOUT:'请求超时，操作结果未知；不自动重试，避免重复提交。',NETWORK:'网络请求失败，未确认的操作不会计为成功。',AUTH:'登录失效或访问受限，请回顺丰App确认。',RATE:'触发限流，已停止后续请求。',HTTP:'接口返回异常HTTP状态，已停止。',JSON:'接口响应不是有效JSON，已停止。'};
+    detail=(sub?sub+'；':'')+(map[e.message] || '执行异常，已停止；请在App核对。');
+    sub='本轮未完整完成';
+  } finally {
+    if(owns){
+      // Preserve unexpired lease on timeout: the server may still process that request.
+      if(sub!=='本轮未完整完成' && readLease().owner===stamp)$persistentStore.write('{}',LOCK);
+      if(sub || detail)notify(title,sub,detail);
+    }
+    finish();
+  }
+})();
