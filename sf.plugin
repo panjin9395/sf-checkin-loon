@@ -1,10 +1,12 @@
 #!name = 顺丰签到
-#!desc = 打开会员/积分页触发；10分钟限流、执行锁、90秒预算；仅按接口结果报告，超时不重试。v2.2修复毫秒超时与计时器兼容，显示失败阶段。
+#!desc = 打开会员/积分页触发；10分钟限流、执行锁、90秒预算；仅按接口结果报告，超时不重试。v2.3新增手动诊断：显示触发、限流、会话、执行结果。
 #!author = ops
 #!icon = https://mcs-mimp-static.sf-express.com/favicon.ico
 
 [Script]
-http-request ^https:\/\/mcs-mimp-web\.sf-express\.com\/mcs-mimp\/commonPost\/.*(queryPointTaskAndSignFromES|personalInfoNew|automaticSignFetchPackage) script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/optimize-v2/sf_checkin-v22.js, requires-body=false, timeout=100, tag=顺丰签到
+http-request ^https:\/\/mcs-mimp-web\.sf-express\.com\/mcs-mimp\/commonPost\/.*(queryPointTaskAndSignFromES|personalInfoNew|automaticSignFetchPackage) script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/optimize-v2/sf_checkin-v23.js, requires-body=false, timeout=100, tag=顺丰签到
+
+generic script-path=https://raw.githubusercontent.com/panjin9395/sf-checkin-loon/optimize-v2/sf_checkin-v23.js, timeout=10, tag=顺丰运行诊断
 
 [MITM]
 hostname = mcs-mimp-web.sf-express.com
