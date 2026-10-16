@@ -1,6 +1,6 @@
 // SF LAN upload only; no SF task requests. Key is paired locally, never in GitHub.
 (function(){
- const base='http://192.168.9.102:8768', key=$persistentStore.read('sf_lan_key');
+ const base='http://192.168.8.66:8768', key=$persistentStore.read('sf_lan_key');
  const note=(s)=>$notification.post('顺丰会话同步','局域网模式',s);
  const hex=b=>Array.from(b,x=>x.toString(16).padStart(2,'0')).join('');
  const bytes=h=>new Uint8Array(h.match(/../g).map(x=>parseInt(x,16)));
